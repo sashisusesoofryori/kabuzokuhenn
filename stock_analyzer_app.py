@@ -51,13 +51,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 class StockAnalyzer:
-    class StockAnalyzer:
+  class StockAnalyzer:
     def __init__(self):
         self.base_url = "https://irbank.net"
-        # ヘッダーをブラウザに偽装（ブロック回避のため強化）
+        # ヘッダーを強化してブロックされにくくする
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         
     def fetch_irbank_data(self, stock_code):
@@ -66,15 +65,17 @@ class StockAnalyzer:
         
         try:
             time.sleep(1)  # サーバー負荷軽減
-            # pandasのread_htmlを使ってテーブルを一括取得（より強力）
+            
+            # pandasのread_htmlでテーブルを一括取得（より強力な方法）
+            # 注意: 該当URLにテーブルがない場合はエラーになります
             dfs = pd.read_html(url, encoding='utf-8', header=0)
             
-            # 企業名取得用（ここはrequestsを使う）
+            # 企業名取得用
             response = requests.get(url, headers=self.headers, timeout=10)
             soup = BeautifulSoup(response.content, 'html.parser')
             company_name = self._extract_company_name(soup, stock_code)
             
-            # データ格納用辞書
+            # データ格納用
             data = {
                 'company_name': company_name,
                 'revenue': [], 'eps': [], 'total_assets': [], 
@@ -83,34 +84,25 @@ class StockAnalyzer:
                 'years': []
             }
 
-            # 取得した全テーブルから必要なデータを探す
-            # IRBANKの構造に合わせてキーワード検索
+            # キーワード辞書
             keywords = {
-                'revenue': '売上高',
-                'eps': 'EPS',
-                'total_assets': '総資産',
-                'operating_cf': '営業CF',
-                'cash': '現金等',
-                'roe': 'ROE',
-                'equity_ratio': '自己資本比率',
-                'dividend': '配当',
-                'payout_ratio': '配当性向'
+                'revenue': '売上高', 'eps': 'EPS', 'total_assets': '総資産',
+                'operating_cf': '営業CF', 'cash': '現金等', 'roe': 'ROE',
+                'equity_ratio': '自己資本比率', 'dividend': '配当', 'payout_ratio': '配当性向'
             }
 
+            # テーブルからデータを検索
             for key, keyword in keywords.items():
                 for df in dfs:
-                    # データフレームの中にキーワードが含まれているか
-                    # 文字列型にして検索
+                    # データフレームを文字列化して検索
                     if df.apply(lambda x: x.astype(str).str.contains(keyword, na=False)).any().any():
-                        # キーワードがある行を特定
-                        # 注: IRBANKのテーブル構造に依存しますが、多くのケースでこれで拾えます
                         found_values = self._find_values_in_df(df, keyword)
                         if found_values:
                             data[key] = found_values[-5:] # 最新5年
 
-            # データが空の場合はエラー扱い
+            # データが空（取得失敗）の場合はエラーとする
             if not data['revenue']:
-                raise ValueError("財務データが見つかりませんでした")
+                return None
 
             # 年度の設定（簡易的に現在から過去5年）
             current_year = datetime.now().year
@@ -119,91 +111,73 @@ class StockAnalyzer:
             return data
             
         except Exception as e:
+            # エラー時はダミーデータを返さず、Noneを返す
             st.error(f"データ取得エラー: {str(e)}")
-            st.warning("⚠️ Streamlit CloudのIPがIRBANKにブロックされているか、データが存在しません。")
-            return None # ダミーデータではなくNoneを返す
+            st.warning("IRBANKからデータを取得できませんでした。アクセスがブロックされている可能性があります。")
+            return None
 
     def _find_values_in_df(self, df, keyword):
-        """DataFrameから特定のキーワードの行の数値を抽出"""
+        """DataFrameから数値を抽出するヘルパー関数"""
         try:
-            # キーワードを含む行を探す
             mask = df.apply(lambda x: x.astype(str).str.contains(keyword, na=False)).any(axis=1)
             target_rows = df[mask]
+            if target_rows.empty: return []
             
-            if target_rows.empty:
-                return []
-            
-            # 最初のヒット行を使用
             row = target_rows.iloc[0]
             values = []
-            
-            # 行の各セルを数値変換してリスト化
             for item in row:
                 val = self._parse_number(str(item))
                 if val is not None:
                     values.append(val)
-            
             return values
         except:
             return []
 
     def _extract_company_name(self, soup, stock_code):
-        """企業名を抽出"""
         try:
             title = soup.find('h1')
-            if title:
-                return title.text.strip()
-        except:
-            pass
+            if title: return title.text.strip()
+        except: pass
         return f"企業コード{stock_code}"
     
     def _parse_number(self, text):
-        """テキストから数値を抽出"""
         try:
-            # カンマや単位、%を除去
-            text = re.sub(r'[,円億万百千%]', '', text)
-            text = text.strip()
-            # 年号やテキストを除外して数値のみ抽出
+            text = re.sub(r'[,円億万百千%]', '', text).strip()
             if text and text != '-' and text.replace('.','',1).isdigit():
                 return float(text)
-        except:
-            pass
+        except: pass
         return None
+    
     def calculate_score(self, data):
-        """100点満点でスコアを算出"""
+        # データがNoneの場合は計算しない
+        if data is None:
+            return 0, {}
+
         score_details = {}
+        # 以下ロジックは変更なし
+        score_details['revenue'] = 15 if self._is_increasing(data.get('revenue', [])) else 0
+        score_details['eps'] = 15 if self._is_increasing(data.get('eps', [])) else 0
+        score_details['total_assets'] = 10 if self._is_increasing(data.get('total_assets', [])) else 0
         
-        # 1. 経常収益 (15点)
-        score_details['revenue'] = 15 if self._is_increasing(data['revenue']) else 0
+        op_cf = data.get('operating_cf', [])
+        score_details['operating_cf'] = 10 if (all(x > 0 for x in op_cf) and self._is_increasing(op_cf)) else 0
         
-        # 2. EPS (15点)
-        score_details['eps'] = 15 if self._is_increasing(data['eps']) else 0
-        
-        # 3. 総資産 (10点)
-        score_details['total_assets'] = 10 if self._is_increasing(data['total_assets']) else 0
-        
-        # 4. 営業CF (10点)
-        score_details['operating_cf'] = 10 if (all(x > 0 for x in data['operating_cf']) and 
-                                                 self._is_increasing(data['operating_cf'])) else 0
-        
-        # 5. 現金等 (10点)
-        score_details['cash'] = 10 if self._is_increasing(data['cash']) else 0
-        
-        # 6. ROE (10点)
-        score_details['roe'] = 10 if all(x >= 7 for x in data['roe']) else 0
-        
-        # 7. 自己資本比率 (10点)
-        score_details['equity_ratio'] = 10 if all(x >= 50 for x in data['equity_ratio']) else 0
-        
-        # 8. 1株配当 (10点)
-        score_details['dividend'] = 10 if self._is_non_decreasing(data['dividend']) else 0
-        
-        # 9. 配当性向 (10点)
-        score_details['payout_ratio'] = 10 if all(x <= 40 for x in data['payout_ratio']) else 0
+        score_details['cash'] = 10 if self._is_increasing(data.get('cash', [])) else 0
+        score_details['roe'] = 10 if all(x >= 7 for x in data.get('roe', [])) else 0
+        score_details['equity_ratio'] = 10 if all(x >= 50 for x in data.get('equity_ratio', [])) else 0
+        score_details['dividend'] = 10 if self._is_non_decreasing(data.get('dividend', [])) else 0
+        score_details['payout_ratio'] = 10 if all(x <= 40 for x in data.get('payout_ratio', [])) else 0
         
         total_score = sum(score_details.values())
         return total_score, score_details
     
+    def _is_increasing(self, values):
+        if not values or len(values) < 2: return False
+        return all(values[i] < values[i+1] for i in range(len(values)-1))
+    
+    def _is_non_decreasing(self, values):
+        if not values or len(values) < 2: return True
+        return all(values[i] <= values[i+1] for i in range(len(values)-1))
     def _is_increasing(self, values):
         """右肩上がりかチェック"""
         if len(values) < 2:
