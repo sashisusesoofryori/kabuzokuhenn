@@ -492,6 +492,13 @@ if analyze_button and stock_code:
             st.plotly_chart(create_trend_chart(data['dividend'], '1株配当', data['years']), use_container_width=True)
         with col2:
             st.plotly_chart(create_trend_chart(data['payout_ratio'], '配当性向 (%)', data['years']), use_container_width=True)
+            # 🎯 ここから追加：計算されたスコアをデカデカと表示する
+        st.markdown(f"""
+            <div style="text-align: center; border: 2px solid #1f77b4; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                <h2 style="margin: 0;">総合評価スコア</h2>
+                <div style="font-size: 80px; font-weight: bold; color: #1f77b4;">{data['score']}点</div>
+            </div>
+        """, unsafe_allow_html=True)
 
 elif not stock_code and analyze_button:
     st.warning("⚠️ 銘柄コードを入力してください")
