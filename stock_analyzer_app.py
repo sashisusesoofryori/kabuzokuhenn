@@ -375,19 +375,30 @@ with st.sidebar:
         )
 
 # メインエリア
+# メインエリア（修正版）
 if analyze_button and stock_code:
     with st.spinner('データ取得中...'):
         # 財務データ取得
         data = analyzer.fetch_irbank_data(stock_code)
-        score, score_details = analyzer.calculate_score(data)
-        save_history(stock_code, data['company_name'], score, score_details)
         
-        # 株価データ取得
-        period, interval = timeframe_options[timeframe]
-        stock_df = analyzer.fetch_stock_price(stock_code, period, interval)
-    
-    st.success(f"✅ {data['company_name']} の分析が完了しました！")
-    
+        # 【重要】データが正しく取れた場合のみ計算に進む
+        if data is not None:
+            score, score_details = analyzer.calculate_score(data)
+            save_history(stock_code, data['company_name'], score, score_details)
+            
+            # 株価データ取得
+            period, interval = timeframe_options[timeframe]
+            stock_df = analyzer.fetch_stock_price(stock_code, period, interval)
+            
+            st.success(f"✅ {data['company_name']} の分析が完了しました！")
+            
+            # --- ここから下のチャート表示処理へ続く ---
+            # (インデントに注意してください)
+            
+        else:
+            # データが取れなかった場合
+            st.error("分析できませんでした。しばらく時間を空けるか、別の銘柄コードを試してください。")
+            stock_df = None # エラー回避用
     # 株価チャート表示
     if stock_df is not None:
         st.subheader("💹 株価チャート")
