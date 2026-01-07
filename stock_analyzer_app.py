@@ -51,10 +51,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 class StockAnalyzer:
-  class StockAnalyzer:
     def __init__(self):
         self.base_url = "https://irbank.net"
-        # ヘッダーを強化してブロックされにくくする
+        # ヘッダーをブラウザに偽装してブロックを回避
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
@@ -65,9 +64,7 @@ class StockAnalyzer:
         
         try:
             time.sleep(1)  # サーバー負荷軽減
-            
-            # pandasのread_htmlでテーブルを一括取得（より強力な方法）
-            # 注意: 該当URLにテーブルがない場合はエラーになります
+            # pandasのread_htmlを使ってテーブルを一括取得
             dfs = pd.read_html(url, encoding='utf-8', header=0)
             
             # 企業名取得用
@@ -75,7 +72,6 @@ class StockAnalyzer:
             soup = BeautifulSoup(response.content, 'html.parser')
             company_name = self._extract_company_name(soup, stock_code)
             
-            # データ格納用
             data = {
                 'company_name': company_name,
                 'revenue': [], 'eps': [], 'total_assets': [], 
@@ -84,40 +80,35 @@ class StockAnalyzer:
                 'years': []
             }
 
-            # キーワード辞書
             keywords = {
                 'revenue': '売上高', 'eps': 'EPS', 'total_assets': '総資産',
                 'operating_cf': '営業CF', 'cash': '現金等', 'roe': 'ROE',
                 'equity_ratio': '自己資本比率', 'dividend': '配当', 'payout_ratio': '配当性向'
             }
 
-            # テーブルからデータを検索
+            # 各テーブルからデータを検索
             for key, keyword in keywords.items():
                 for df in dfs:
-                    # データフレームを文字列化して検索
                     if df.apply(lambda x: x.astype(str).str.contains(keyword, na=False)).any().any():
                         found_values = self._find_values_in_df(df, keyword)
                         if found_values:
                             data[key] = found_values[-5:] # 最新5年
 
-            # データが空（取得失敗）の場合はエラーとする
+            # 必須データが取れていない場合はNoneを返す
             if not data['revenue']:
                 return None
 
-            # 年度の設定（簡易的に現在から過去5年）
+            # 年度の設定
             current_year = datetime.now().year
             data['years'] = list(range(current_year - 4, current_year + 1))
-            
             return data
             
         except Exception as e:
-            # エラー時はダミーデータを返さず、Noneを返す
-            st.error(f"データ取得エラー: {str(e)}")
-            st.warning("IRBANKからデータを取得できませんでした。アクセスがブロックされている可能性があります。")
+            st.error(f"データ取得に失敗しました: {str(e)}")
             return None
 
     def _find_values_in_df(self, df, keyword):
-        """DataFrameから数値を抽出するヘルパー関数"""
+        """DataFrameからキーワード行の数値を抽出"""
         try:
             mask = df.apply(lambda x: x.astype(str).str.contains(keyword, na=False)).any(axis=1)
             target_rows = df[mask]
@@ -127,11 +118,9 @@ class StockAnalyzer:
             values = []
             for item in row:
                 val = self._parse_number(str(item))
-                if val is not None:
-                    values.append(val)
+                if val is not None: values.append(val)
             return values
-        except:
-            return []
+        except: return []
 
     def _extract_company_name(self, soup, stock_code):
         try:
@@ -143,18 +132,23 @@ class StockAnalyzer:
     def _parse_number(self, text):
         try:
             text = re.sub(r'[,円億万百千%]', '', text).strip()
-            if text and text != '-' and text.replace('.','',1).isdigit():
+            if text and text != '-' and text.replace('.','',1).replace('-','',1).isdigit():
                 return float(text)
         except: pass
         return None
     
-    def calculate_score(self, data):
-        # データがNoneの場合は計算しない
-        if data is None:
-            return 0, {}
+    def fetch_stock_price(self, stock_code, period='5y', interval='1d'):
+        try:
+            ticker = f"{stock_code}.T"
+            stock = yf.Ticker(ticker)
+            df = stock.history(period=period, interval=interval)
+            return df
+        except: return None
 
+    def calculate_score(self, data):
+        """100点満点でスコアを算出"""
         score_details = {}
-        # 以下ロジックは変更なし
+        # 判定ロジック
         score_details['revenue'] = 15 if self._is_increasing(data.get('revenue', [])) else 0
         score_details['eps'] = 15 if self._is_increasing(data.get('eps', [])) else 0
         score_details['total_assets'] = 10 if self._is_increasing(data.get('total_assets', [])) else 0
@@ -178,344 +172,94 @@ class StockAnalyzer:
     def _is_non_decreasing(self, values):
         if not values or len(values) < 2: return True
         return all(values[i] <= values[i+1] for i in range(len(values)-1))
-    def _is_increasing(self, values):
-        """右肩上がりかチェック"""
-        if len(values) < 2:
-            return False
-        return all(values[i] < values[i+1] for i in range(len(values)-1))
-    
-    def _is_non_decreasing(self, values):
-        """非減少（維持または増加）かチェック"""
-        if len(values) < 2:
-            return True
-        return all(values[i] <= values[i+1] for i in range(len(values)-1))
 
 def load_history():
-    """分析履歴を読み込み"""
     if HISTORY_FILE.exists():
         with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     return []
 
 def save_history(stock_code, company_name, score, score_details):
-    """分析履歴を保存"""
     history = load_history()
     entry = {
-        'stock_code': stock_code,
-        'company_name': company_name,
-        'score': score,
-        'score_details': score_details,
+        'stock_code': stock_code, 'company_name': company_name,
+        'score': score, 'score_details': score_details,
         'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     history.append(entry)
-    
-    # 最新100件のみ保持
     history = history[-100:]
-    
     with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
-def save_to_github():
-    """GitHub連携用の保存処理"""
-    # Git操作はStreamlit Cloudの環境で自動的に処理される
-    # ローカル環境では手動でコミット・プッシュが必要
-    pass
-
 def create_score_chart(score):
-    """スコア表示用円グラフ"""
     color = '#ff4444' if score < 50 else '#ffaa00' if score < 70 else '#00cc66'
-    
     fig = go.Figure(data=[go.Pie(
-        values=[score, 100-score],
-        labels=['スコア', ''],
-        hole=0.7,
-        marker_colors=[color, '#e0e0e0'],
-        textinfo='none',
-        hoverinfo='label+value'
+        values=[score, 100-score], labels=['スコア', ''], hole=0.7,
+        marker_colors=[color, '#e0e0e0'], textinfo='none'
     )])
-    
-    fig.add_annotation(
-        text=f'{score}<br>点',
-        x=0.5, y=0.5,
-        font_size=40,
-        showarrow=False
-    )
-    
-    fig.update_layout(
-        showlegend=False,
-        height=400,
-        margin=dict(t=0, b=0, l=0, r=0)
-    )
+    fig.add_annotation(text=f'{score}<br>点', x=0.5, y=0.5, font_size=40, showarrow=False)
+    fig.update_layout(showlegend=False, height=400, margin=dict(t=0, b=0, l=0, r=0))
     return fig
 
 def create_trend_chart(data, metric_name, years):
-    """推移グラフ作成"""
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=years,
-        y=data,
-        mode='lines+markers',
-        name=metric_name,
-        line=dict(width=3),
-        marker=dict(size=10),
-        fill='tonexty',
-        fillcolor='rgba(31, 119, 180, 0.2)'
-    ))
-    
-    fig.update_layout(
-        title=f'{metric_name}の推移',
-        xaxis_title='年度',
-        yaxis_title='値',
-        height=300,
-        hovermode='x unified',
-        template='plotly_white'
-    )
+    fig.add_trace(go.Scatter(x=years, y=data, mode='lines+markers', name=metric_name))
+    fig.update_layout(title=f'{metric_name}の推移', height=300, template='plotly_white')
     return fig
 
 def create_stock_price_chart(df, timeframe_label):
-    """株価チャート作成"""
-    if df is None or df.empty:
-        return None
-    
-    fig = go.Figure(data=[go.Candlestick(
-        x=df.index,
-        open=df['Open'],
-        high=df['High'],
-        low=df['Low'],
-        close=df['Close'],
-        name='株価'
-    )])
-    
-    fig.update_layout(
-        title=f'株価推移 ({timeframe_label})',
-        yaxis_title='株価 (円)',
-        xaxis_title='日付',
-        height=400,
-        template='plotly_white',
-        xaxis_rangeslider_visible=False
-    )
+    if df is None or df.empty: return None
+    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+    fig.update_layout(title=f'株価推移 ({timeframe_label})', height=400, template='plotly_white', xaxis_rangeslider_visible=False)
     return fig
 
-# メインアプリケーション
+# メインエリア表示
 st.markdown('<div class="main-header">📊 株最強分析くん</div>', unsafe_allow_html=True)
-
 analyzer = StockAnalyzer()
 
-# サイドバー
 with st.sidebar:
     st.header("⚙️ 設定")
     stock_code = st.text_input("銘柄コード", value="", placeholder="例: 7203")
-    
-    st.markdown("---")
-    st.subheader("📈 株価表示期間")
-    
     timeframe_options = {
-        "5分足": ("5d", "5m"),
-        "15分足": ("5d", "15m"),
-        "1時間足": ("1mo", "1h"),
-        "日足（1週間）": ("7d", "1d"),
-        "日足（1ヶ月）": ("1mo", "1d"),
-        "日足（1年）": ("1y", "1d"),
-        "週足（5年）": ("5y", "1wk"),
-        "月足（MAX）": ("max", "1mo")
+        "日足（1年）": ("1y", "1d"), "週足（5年）": ("5y", "1wk"), "月足（MAX）": ("max", "1mo")
     }
-    
-    timeframe = st.selectbox(
-        "時間軸を選択",
-        list(timeframe_options.keys()),
-        index=6
-    )
-    
+    timeframe = st.selectbox("時間軸を選択", list(timeframe_options.keys()), index=0)
     analyze_button = st.button("🔍 分析開始", type="primary", use_container_width=True)
-    
-    st.markdown("---")
-    st.subheader("📜 分析履歴")
     history = load_history()
-    if history:
-        for entry in reversed(history[-5:]):
-            with st.expander(f"{entry['company_name']} ({entry['stock_code']})"):
-                st.metric("スコア", f"{entry['score']}点")
-                st.caption(entry['date'])
-    else:
-        st.info("履歴がありません")
-    
-    st.markdown("---")
-    if st.button("💾 データをエクスポート"):
-        st.download_button(
-            label="履歴をダウンロード",
-            data=json.dumps(history, ensure_ascii=False, indent=2),
-            file_name=f"stock_analysis_history_{datetime.now().strftime('%Y%m%d')}.json",
-            mime="application/json"
-        )
 
-# メインエリア
-# メインエリア（修正版）
 if analyze_button and stock_code:
     with st.spinner('データ取得中...'):
-        # 財務データ取得
         data = analyzer.fetch_irbank_data(stock_code)
         
-        # 【重要】データが正しく取れた場合のみ計算に進む
         if data is not None:
             score, score_details = analyzer.calculate_score(data)
             save_history(stock_code, data['company_name'], score, score_details)
-            
-            # 株価データ取得
             period, interval = timeframe_options[timeframe]
             stock_df = analyzer.fetch_stock_price(stock_code, period, interval)
             
             st.success(f"✅ {data['company_name']} の分析が完了しました！")
             
-            # --- ここから下のチャート表示処理へ続く ---
-            # (インデントに注意してください)
+            if stock_df is not None:
+                st.plotly_chart(create_stock_price_chart(stock_df, timeframe), use_container_width=True)
             
+            st.plotly_chart(create_score_chart(score), use_container_width=True)
+            
+            # 詳細評価の表示
+            cols = st.columns(3)
+            criteria = {
+                'revenue': '経常収益', 'eps': 'EPS', 'total_assets': '総資産',
+                'operating_cf': '営業CF', 'cash': '現金等', 'roe': 'ROE',
+                'equity_ratio': '自己資本比率', 'dividend': '1株配当', 'payout_ratio': '配当性向'
+            }
+            for i, (key, name) in enumerate(criteria.items()):
+                with cols[i % 3]:
+                    st.info(f"{name}: {score_details[key]}点")
         else:
-            # データが取れなかった場合
-            st.error("分析できませんでした。しばらく時間を空けるか、別の銘柄コードを試してください。")
-            stock_df = None # エラー回避用
-    # 株価チャート表示
-    if stock_df is not None:
-        st.subheader("💹 株価チャート")
-        stock_chart = create_stock_price_chart(stock_df, timeframe)
-        if stock_chart:
-            st.plotly_chart(stock_chart, use_container_width=True)
-        
-        # 簡易統計
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("現在値", f"{stock_df['Close'].iloc[-1]:.2f}円")
-        with col2:
-            change = stock_df['Close'].iloc[-1] - stock_df['Close'].iloc[-2]
-            change_pct = (change / stock_df['Close'].iloc[-2]) * 100
-            st.metric("前日比", f"{change:.2f}円", f"{change_pct:+.2f}%")
-        with col3:
-            st.metric("期間高値", f"{stock_df['High'].max():.2f}円")
-        with col4:
-            st.metric("期間安値", f"{stock_df['Low'].min():.2f}円")
-    
-    st.markdown("---")
-    
-    # スコア表示
-    st.subheader("🎯 総合評価スコア")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.plotly_chart(create_score_chart(score), use_container_width=True)
-    
-    # 評価コメント
-    if score >= 80:
-        st.success("🌟 優良企業！非常に高い投資価値が期待できます。")
-    elif score >= 60:
-        st.info("👍 良好な財務状態です。")
-    elif score >= 40:
-        st.warning("⚠️ 一部改善の余地があります。")
-    else:
-        st.error("❌ 慎重な判断が必要です。")
-    
-    # 詳細スコア
-    st.subheader("📋 詳細評価")
-    
-    criteria = {
-        'revenue': ('経常収益', '右肩上がり', 15),
-        'eps': ('EPS', '右肩上がり', 15),
-        'total_assets': ('総資産', '増加傾向', 10),
-        'operating_cf': ('営業CF', 'プラス＆増加', 10),
-        'cash': ('現金等', '積み上がり', 10),
-        'roe': ('ROE', '7%以上', 10),
-        'equity_ratio': ('自己資本比率', '50%以上', 10),
-        'dividend': ('1株配当', '非減配', 10),
-        'payout_ratio': ('配当性向', '40%以下', 10)
-    }
-    
-    cols = st.columns(3)
-    for idx, (key, (name, criteria_text, max_score)) in enumerate(criteria.items()):
-        with cols[idx % 3]:
-            achieved = score_details[key]
-            status = "✅ 合格" if achieved == max_score else "❌ 不合格"
-            color = "#d4edda" if achieved == max_score else "#f8d7da"
-            st.markdown(f"""
-            <div style="padding: 1rem; border-radius: 0.5rem; background-color: {color}; margin: 0.5rem 0;">
-                <strong>{name}</strong><br>
-                {status} ({achieved}/{max_score}点)<br>
-                <small>基準: {criteria_text}</small>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # 推移グラフ
-    st.subheader("📊 財務指標の推移")
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["収益性", "資産・CF", "健全性", "配当"])
-    
-    with tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(create_trend_chart(data['revenue'], '経常収益', data['years']), use_container_width=True)
-        with col2:
-            st.plotly_chart(create_trend_chart(data['eps'], 'EPS', data['years']), use_container_width=True)
-    
-    with tab2:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(create_trend_chart(data['total_assets'], '総資産', data['years']), use_container_width=True)
-        with col2:
-            st.plotly_chart(create_trend_chart(data['operating_cf'], '営業CF', data['years']), use_container_width=True)
-    
-    with tab3:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(create_trend_chart(data['roe'], 'ROE (%)', data['years']), use_container_width=True)
-        with col2:
-            st.plotly_chart(create_trend_chart(data['equity_ratio'], '自己資本比率 (%)', data['years']), use_container_width=True)
-    
-    with tab4:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.plotly_chart(create_trend_chart(data['dividend'], '1株配当', data['years']), use_container_width=True)
-        with col2:
-            st.plotly_chart(create_trend_chart(data['payout_ratio'], '配当性向 (%)', data['years']), use_container_width=True)
+            st.error("財務データが取得できませんでした。IRBANKからブロックされているか、銘柄コードが正しくない可能性があります。")
 
 elif not stock_code and analyze_button:
     st.warning("⚠️ 銘柄コードを入力してください")
-else:
-    st.info("👈 サイドバーから銘柄コードを入力して分析を開始してください")
-
-# ランキング表示
-st.markdown("---")
-st.subheader("🏆 月間スコアランキング")
-
-if history:
-    df = pd.DataFrame(history)
-    df['month'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m')
-    
-    current_month = datetime.now().strftime('%Y-%m')
-    monthly_data = df[df['month'] == current_month].sort_values('score', ascending=False)
-    
-    if not monthly_data.empty:
-        # 重複する銘柄は最新のもののみ表示
-        monthly_data = monthly_data.drop_duplicates(subset=['stock_code'], keep='first')
-        
-        display_df = monthly_data[['stock_code', 'company_name', 'score', 'date']].head(10)
-        display_df = display_df.rename(columns={
-            'stock_code': '銘柄コード',
-            'company_name': '企業名',
-            'score': 'スコア',
-            'date': '分析日時'
-        })
-        
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("今月の分析データがありません")
-else:
-    st.info("ランキングデータがありません")
 
 # フッター
 st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; font-size: 0.9rem;'>
-    <p>💡 このアプリは財務データに基づく独自のスコアリングシステムです。</p>
-    <p>投資判断は自己責任でお願いします。IRBANKおよびYahoo Financeからデータを取得しています。</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: #666;'>投資判断は自己責任でお願いします。</div>", unsafe_allow_html=True)
