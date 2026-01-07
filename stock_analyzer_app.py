@@ -197,7 +197,7 @@ def create_score_chart(score):
         values=[score, 100-score], labels=['スコア', ''], hole=0.7,
         marker_colors=[color, '#e0e0e0'], textinfo='none'
     )])
-    fig.add_annotation(text=f'{score}<br>点', x=0.5, y=0.5, font_size=40, showarrow=False)
+    fig.add_annotation(text= f'{score}<br>点', x=0.5, y=0.5, font_size=40, showarrow=False)
     fig.update_layout(showlegend=False, height=400, margin=dict(t=0, b=0, l=0, r=0))
     return fig
 
