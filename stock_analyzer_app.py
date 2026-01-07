@@ -51,54 +51,102 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 class StockAnalyzer:
+    class StockAnalyzer:
     def __init__(self):
         self.base_url = "https://irbank.net"
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        # ヘッダーをブラウザに偽装（ブロック回避のため強化）
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
+        }
         
     def fetch_irbank_data(self, stock_code):
         """IRBANKから財務データを取得"""
         url = f"{self.base_url}/{stock_code}"
         
         try:
-            time.sleep(2)  # サーバー負荷軽減
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
+            time.sleep(1)  # サーバー負荷軽減
+            # pandasのread_htmlを使ってテーブルを一括取得（より強力）
+            dfs = pd.read_html(url, encoding='utf-8', header=0)
             
+            # 企業名取得用（ここはrequestsを使う）
+            response = requests.get(url, headers=self.headers, timeout=10)
             soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # 企業名を取得
             company_name = self._extract_company_name(soup, stock_code)
             
-            # 各財務指標を取得
+            # データ格納用辞書
             data = {
                 'company_name': company_name,
-                'revenue': self._extract_metric(soup, '売上高'),
-                'eps': self._extract_metric(soup, 'EPS'),
-                'total_assets': self._extract_metric(soup, '総資産'),
-                'operating_cf': self._extract_metric(soup, '営業CF'),
-                'cash': self._extract_metric(soup, '現金等'),
-                'roe': self._extract_metric(soup, 'ROE'),
-                'equity_ratio': self._extract_metric(soup, '自己資本比率'),
-                'dividend': self._extract_metric(soup, '配当'),
-                'payout_ratio': self._extract_metric(soup, '配当性向'),
+                'revenue': [], 'eps': [], 'total_assets': [], 
+                'operating_cf': [], 'cash': [], 'roe': [], 
+                'equity_ratio': [], 'dividend': [], 'payout_ratio': [],
                 'years': []
             }
-            
-            # 年度を推定
+
+            # 取得した全テーブルから必要なデータを探す
+            # IRBANKの構造に合わせてキーワード検索
+            keywords = {
+                'revenue': '売上高',
+                'eps': 'EPS',
+                'total_assets': '総資産',
+                'operating_cf': '営業CF',
+                'cash': '現金等',
+                'roe': 'ROE',
+                'equity_ratio': '自己資本比率',
+                'dividend': '配当',
+                'payout_ratio': '配当性向'
+            }
+
+            for key, keyword in keywords.items():
+                for df in dfs:
+                    # データフレームの中にキーワードが含まれているか
+                    # 文字列型にして検索
+                    if df.apply(lambda x: x.astype(str).str.contains(keyword, na=False)).any().any():
+                        # キーワードがある行を特定
+                        # 注: IRBANKのテーブル構造に依存しますが、多くのケースでこれで拾えます
+                        found_values = self._find_values_in_df(df, keyword)
+                        if found_values:
+                            data[key] = found_values[-5:] # 最新5年
+
+            # データが空の場合はエラー扱い
+            if not data['revenue']:
+                raise ValueError("財務データが見つかりませんでした")
+
+            # 年度の設定（簡易的に現在から過去5年）
             current_year = datetime.now().year
-            data_length = len(data['revenue'])
-            data['years'] = list(range(current_year - data_length + 1, current_year + 1))
+            data['years'] = list(range(current_year - 4, current_year + 1))
             
             return data
             
         except Exception as e:
             st.error(f"データ取得エラー: {str(e)}")
-            # エラー時はダミーデータを返す
-            return self._get_dummy_data(stock_code)
-    
+            st.warning("⚠️ Streamlit CloudのIPがIRBANKにブロックされているか、データが存在しません。")
+            return None # ダミーデータではなくNoneを返す
+
+    def _find_values_in_df(self, df, keyword):
+        """DataFrameから特定のキーワードの行の数値を抽出"""
+        try:
+            # キーワードを含む行を探す
+            mask = df.apply(lambda x: x.astype(str).str.contains(keyword, na=False)).any(axis=1)
+            target_rows = df[mask]
+            
+            if target_rows.empty:
+                return []
+            
+            # 最初のヒット行を使用
+            row = target_rows.iloc[0]
+            values = []
+            
+            # 行の各セルを数値変換してリスト化
+            for item in row:
+                val = self._parse_number(str(item))
+                if val is not None:
+                    values.append(val)
+            
+            return values
+        except:
+            return []
+
     def _extract_company_name(self, soup, stock_code):
         """企業名を抽出"""
         try:
@@ -109,71 +157,18 @@ class StockAnalyzer:
             pass
         return f"企業コード{stock_code}"
     
-    def _extract_metric(self, soup, metric_name):
-        """特定の財務指標を抽出"""
-        try:
-            # テーブルから該当する行を探す
-            tables = soup.find_all('table')
-            for table in tables:
-                rows = table.find_all('tr')
-                for row in rows:
-                    cells = row.find_all(['td', 'th'])
-                    if cells and metric_name in cells[0].text:
-                        # 数値データを抽出（最新5年分）
-                        values = []
-                        for cell in cells[1:6]:  # 最大5列
-                            text = cell.text.strip()
-                            # 数値を抽出
-                            num = self._parse_number(text)
-                            if num is not None:
-                                values.append(num)
-                        if values:
-                            return values[-5:]  # 最新5年分
-        except:
-            pass
-        # デフォルト値を返す
-        return [100, 110, 120, 130, 140]
-    
     def _parse_number(self, text):
         """テキストから数値を抽出"""
         try:
-            # カンマや単位を除去
+            # カンマや単位、%を除去
             text = re.sub(r'[,円億万百千%]', '', text)
             text = text.strip()
-            if text and text != '-':
+            # 年号やテキストを除外して数値のみ抽出
+            if text and text != '-' and text.replace('.','',1).isdigit():
                 return float(text)
         except:
             pass
         return None
-    
-    def _get_dummy_data(self, stock_code):
-        """ダミーデータを生成（取得失敗時用）"""
-        return {
-            'company_name': f'サンプル企業{stock_code}',
-            'revenue': [1000, 1100, 1250, 1400, 1550],
-            'eps': [50, 55, 62, 70, 78],
-            'total_assets': [5000, 5300, 5700, 6100, 6500],
-            'operating_cf': [200, 220, 250, 280, 300],
-            'cash': [800, 850, 920, 1000, 1100],
-            'roe': [8.5, 8.8, 9.2, 9.5, 9.8],
-            'equity_ratio': [55, 56, 57, 58, 60],
-            'dividend': [10, 11, 12, 13, 14],
-            'payout_ratio': [20, 22, 19, 18, 17],
-            'years': [2020, 2021, 2022, 2023, 2024]
-        }
-    
-    def fetch_stock_price(self, stock_code, period='5y', interval='1d'):
-        """yfinanceで株価データを取得"""
-        try:
-            # 日本株の場合は.Tを付ける
-            ticker = f"{stock_code}.T"
-            stock = yf.Ticker(ticker)
-            df = stock.history(period=period, interval=interval)
-            return df
-        except Exception as e:
-            st.warning(f"株価データ取得エラー: {str(e)}")
-            return None
-    
     def calculate_score(self, data):
         """100点満点でスコアを算出"""
         score_details = {}
